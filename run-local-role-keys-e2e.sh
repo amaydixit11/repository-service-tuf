@@ -319,7 +319,9 @@ def latest_metadata(role):
             status, data = request_json(
                 "GET", f"{METADATA_URL}/{version}.{role}.json"
             )
-        except (URLError, RuntimeError, TimeoutError):
+        except Exception:
+            # A missing version answers 404 with a non-JSON body; that is
+            # the loop's stop condition, not an error.
             break
         if status != 200:
             break
