@@ -111,3 +111,35 @@ they are never configured separately.
     :ref:`guide/general/usage:Metadata Update`, which requires the root
     keys. Keys that belong to the role itself (role online keys and offline
     keys) can be added and removed through the delegation flows.
+
+Offline keys for custom delegations
+===================================
+
+A custom delegation can trust **offline keys** -- keys whose private half the
+Worker does not hold. Declare them when creating the delegation with the
+**Add offline keys** option, which also sets the role's signature
+``threshold``. Offline keys live in the delegation metadata alongside any
+online keys the role trusts; a role may mix online and offline keys.
+
+Because the Worker cannot sign with an offline key, a delegation that needs
+offline signatures to reach its threshold is **not published immediately**.
+The Worker signs with whatever online keys the role trusts (if any), then holds
+the role's new metadata in a *pending signatures* state -- it is not added to
+the snapshot, so clients keep seeing the previous version until the role is
+fully signed.
+
+Provide the missing signatures out-of-band with:
+
+.. code:: shell
+
+    rstuf admin metadata sign
+
+The command lists every role awaiting signatures, custom delegations included.
+Select the delegated role, choose one of its offline keys, and sign. Repeat
+with the role's other offline keys until its threshold is met; the Worker then
+finalizes the role -- bumping the snapshot and publishing the new metadata.
+
+.. note::
+    Nested hash bins cannot use offline keys. Bins are generated and signed
+    automatically by the Worker, so a delegation with nested hash bins must use
+    online keys (and threshold 1) for the binned subtree.
