@@ -671,6 +671,91 @@ def assert_offline_delegation_signing():
     print("    offline delegation signed out-of-band and published OK")
 
 
+def assert_offline_threshold_two_progressive():
+    print("==> Verifying offline delegation with threshold 2 signs progressively")
+    signer_one = CryptoSigner.generate_ed25519()
+    signer_two = CryptoSigner.generate_ed25519()
+    key_one, key_two = signer_one.public_key, signer_two.public_key
+    key_one.unrecognized_fields[KEY_NAME_FIELD] = "offline-one"
+    key_two.unrecognized_fields[KEY_NAME_FIELD] = "offline-two"
+    role = DelegatedRole(
+        name="legal",
+        keyids=[key_one.keyid, key_two.keyid],
+        threshold=2,
+        terminating=True,
+        paths=["legal/*"],
+        unrecognized_fields={"x-rstuf-expire-policy": 30},
+    )
+    delegations = Delegations(
+        keys={key_one.keyid: key_one, key_two.keyid: key_two},
+        roles={"legal": role},
+    )
+    status, response = request_json(
+        "POST",
+        f"{API_URL}/api/v1/delegations/",
+        {"delegations": delegations.to_dict()},
+    )
+    if status != 202:
+        fail(f"threshold-2 offline delegation add returned {status}: {response}")
+    wait_for_task(response["data"]["task_id"])
+
+    def pending_legal():
+        _, resp = request_json("GET", f"{API_URL}/api/v1/metadata/sign")
+        return ((resp or {}).get("data") or {}).get("metadata", {}).get("legal")
+
+    pending = None
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        pending = pending_legal()
+        if pending:
+            break
+        time.sleep(1)
+    if not pending:
+        fail("threshold-2 'legal' role was not held pending")
+
+    # First signature: threshold 2 is NOT met, so it must stay pending.
+    md = Metadata.from_dict(pending)
+    sig_one = signer_one.sign(md.signed_bytes)
+    _, resp = request_json(
+        "POST",
+        f"{API_URL}/api/v1/metadata/sign",
+        {"role": "legal", "signature": sig_one.to_dict()},
+    )
+    wait_for_task(resp["data"]["task_id"])
+
+    still_pending = pending_legal()
+    if not still_pending:
+        fail("'legal' finalized after 1 of 2 signatures (threshold ignored)")
+    if len(still_pending["signatures"]) != 1:
+        fail(f"expected 1 signature pending, got {still_pending['signatures']}")
+    try:
+        with urlopen(f"{METADATA_URL}/1.legal.json", timeout=10) as probe:
+            if probe.status == 200:
+                fail("'legal' published with only 1 of 2 signatures")
+    except HTTPError as error:
+        if error.code != 404:
+            raise
+    print("    1 of 2 signatures: correctly still pending, not published")
+
+    # Second signature: threshold met -> finalize and publish.
+    md2 = Metadata.from_dict(still_pending)
+    sig_two = signer_two.sign(md2.signed_bytes)
+    _, resp = request_json(
+        "POST",
+        f"{API_URL}/api/v1/metadata/sign",
+        {"role": "legal", "signature": sig_two.to_dict()},
+    )
+    wait_for_task(resp["data"]["task_id"])
+
+    published = wait_for_metadata("1.legal.json")
+    sigs = {item["keyid"] for item in published["signatures"]}
+    if not {key_one.keyid, key_two.keyid}.issubset(sigs):
+        fail(f"published legal signatures {sigs} lack both offline keys")
+    if pending_legal():
+        fail("'legal' still pending after reaching threshold")
+    print("    2 of 2 signatures: finalized and published by both keys")
+
+
 def main():
     print("==> Waiting for locally built API")
     wait_for_api()
@@ -679,6 +764,7 @@ def main():
     assert_post_bootstrap_add()
     assert_online_key_removal_rejected()
     assert_offline_delegation_signing()
+    assert_offline_threshold_two_progressive()
     print("\nPASS: local API + Worker + editable CLI role-specific-key E2E")
 
 
