@@ -592,6 +592,85 @@ def assert_online_key_removal_rejected():
         fail(f"logs keyids are {keyids} after rejected update, expected A, B")
 
 
+def assert_offline_delegation_signing():
+    print(
+        "==> Verifying offline custom delegation: pending -> sign -> publish"
+    )
+    # A fresh OFFLINE key: no online URI, so the Worker cannot auto-sign it.
+    offline_signer = CryptoSigner.generate_ed25519()
+    offline_key = offline_signer.public_key
+    offline_key.unrecognized_fields[KEY_NAME_FIELD] = "offline-compliance"
+    role = DelegatedRole(
+        name="compliance",
+        keyids=[offline_key.keyid],
+        threshold=1,
+        terminating=True,
+        paths=["compliance/*"],
+        unrecognized_fields={"x-rstuf-expire-policy": 30},
+    )
+    delegations = Delegations(
+        keys={offline_key.keyid: offline_key},
+        roles={"compliance": role},
+    )
+    status, response = request_json(
+        "POST",
+        f"{API_URL}/api/v1/delegations/",
+        {"delegations": delegations.to_dict()},
+    )
+    if status != 202:
+        fail(f"offline delegation add returned {status}: {response}")
+    wait_for_task(response["data"]["task_id"])
+
+    # It must be held pending in the signing surface, not published, because
+    # the Worker cannot sign an offline key.
+    pending = None
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        _, sign_resp = request_json(
+            "GET", f"{API_URL}/api/v1/metadata/sign"
+        )
+        md = ((sign_resp or {}).get("data") or {}).get("metadata") or {}
+        if "compliance" in md:
+            pending = md["compliance"]
+            break
+        time.sleep(1)
+    if pending is None:
+        fail("offline 'compliance' role was not held pending for signatures")
+
+    # Must not be published while pending. A missing role answers 404 with a
+    # non-JSON body, so probe with a raw request rather than request_json
+    # (which would try to JSON-decode the 404 body).
+    try:
+        with urlopen(
+            f"{METADATA_URL}/1.compliance.json", timeout=10
+        ) as probe:
+            if probe.status == 200:
+                fail("offline 'compliance' was published before it was signed")
+    except HTTPError as error:
+        if error.code != 404:
+            raise
+
+    # Sign the pending metadata with the offline key, out of band, and submit.
+    pending_md = Metadata.from_dict(pending)
+    signature = offline_signer.sign(pending_md.signed_bytes)
+    status, response = request_json(
+        "POST",
+        f"{API_URL}/api/v1/metadata/sign",
+        {"role": "compliance", "signature": signature.to_dict()},
+    )
+    if status != 202:
+        fail(f"metadata sign returned {status}: {response}")
+    wait_for_task(response["data"]["task_id"])
+
+    # Threshold met -> the role is finalized and published, signed by the
+    # offline key.
+    published = wait_for_metadata("1.compliance.json")
+    sigs = {item["keyid"] for item in published["signatures"]}
+    if offline_key.keyid not in sigs:
+        fail(f"published compliance signatures {sigs} lack the offline key")
+    print("    offline delegation signed out-of-band and published OK")
+
+
 def main():
     print("==> Waiting for locally built API")
     wait_for_api()
@@ -599,6 +678,7 @@ def main():
     assert_bootstrap_results()
     assert_post_bootstrap_add()
     assert_online_key_removal_rejected()
+    assert_offline_delegation_signing()
     print("\nPASS: local API + Worker + editable CLI role-specific-key E2E")
 
 
