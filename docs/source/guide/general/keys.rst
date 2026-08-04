@@ -143,3 +143,26 @@ finalizes the role -- bumping the snapshot and publishing the new metadata.
     Nested hash bins cannot use offline keys. Bins are generated and signed
     automatically by the Worker, so a delegation with nested hash bins must use
     online keys (and threshold 1) for the binned subtree.
+
+Supported key backends
+======================
+
+An online key -- repository-wide or role-specific -- may live in any backend
+the Worker's signer store can resolve. It is referenced by the
+``x-rstuf-online-key-uri`` field, whose scheme selects the backend:
+
+* ``fn:<keyid>`` -- a PEM file in the Worker's key directory, named by keyid.
+* ``file2:<path>`` -- a PEM key file at a path on the Worker.
+* ``awskms:``, ``gcpkms:``, ``azurekms:``, ``hv:`` -- AWS KMS, Google Cloud
+  KMS, Azure Key Vault, and HashiCorp Vault respectively; the remainder of the
+  URI is the backend's key identifier as understood by
+  `Secure Systems Library <https://github.com/secure-systems-lab/securesystemslib>`_.
+
+The same backends apply whether the key signs the top-level roles or a single
+custom delegation. Offline keys carry no URI; their signatures are supplied out
+of band as described above.
+
+.. note::
+    The Worker needs access to the chosen backend (for example ambient cloud
+    credentials or a Vault token) configured in its environment, exactly as for
+    the repository online key.
