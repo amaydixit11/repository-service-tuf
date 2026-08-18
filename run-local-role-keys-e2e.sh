@@ -656,14 +656,18 @@ echo "==> Removing stale ${PROJECT_NAME} containers and volumes"
 "${COMPOSE[@]}" down -v --remove-orphans
 
 if ((!SKIP_BUILD)); then
-    BUILD_ARGS=()
-    if ((NO_CACHE)); then
-        BUILD_ARGS+=(--no-cache)
-    fi
     echo "==> Building API from ${API_DIR}"
     echo "==> Building Worker from ${WORKER_DIR}"
-    "${COMPOSE[@]}" build "${BUILD_ARGS[@]}" \
-        repository-service-tuf-api repository-service-tuf-worker
+    # Spelled out both ways rather than expanding a possibly-empty array:
+    # under `set -u`, "${ARR[@]}" on an empty array is an unbound-variable
+    # error in bash 3.2, which is what /bin/bash still is on macOS.
+    if ((NO_CACHE)); then
+        "${COMPOSE[@]}" build --no-cache \
+            repository-service-tuf-api repository-service-tuf-worker
+    else
+        "${COMPOSE[@]}" build \
+            repository-service-tuf-api repository-service-tuf-worker
+    fi
 fi
 
 echo "==> Starting Postgres, Redis, web, API, and Worker"
