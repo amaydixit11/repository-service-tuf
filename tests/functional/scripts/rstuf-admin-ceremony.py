@@ -47,9 +47,7 @@ def main():
     ]
     selection = [v for k, v in input_dict.items() if k.startswith("[select]")]
     multiple_selection = [
-        v
-        for k, v in input_dict.items()
-        if k.startswith("[select multiple]")
+        v for k, v in input_dict.items() if k.startswith("[select multiple]")
     ]
     print("Using parameters:")
     print(json.dumps(input_dict, indent=2))
